@@ -1,0 +1,101 @@
+Function Run-Threaded {
+    Param ($scriptBlock, $targets, $throttleLimit = 4)
+    ## Initial setup of runspace with default sessionState/host
+    $sessionState = [system.management.automation.runspaces.initialsessionstate]::CreateDefault()
+    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $throttleLimit, $sessionState, $host)
+    $runspacePool.Open()
+    ## create empty array to keep track of the threads
+    $threads = @()
+    ## Prepare the threads, one for each target
+    $handles = foreach ($target in $targets) {
+        $powershell = [powershell]::Create().AddScript($scriptBlock).AddArgument($target)
+        $powershell.RunspacePool = $runspacePool
+        $powershell.BeginInvoke()
+        $threads += $powershell
+    }
+    ## Throttling - make sure no more than $throttleLimit threads run at once
+    $output = $null
+    do { 
+        $i = 0
+        $finished = $true
+        foreach ($handle in $handles) {
+            if ($handle -ne $null) {
+                if ($handle.IsCompleted) {
+                    $result = $threads[$i].EndInvoke($handle)
+                    $threads[$i].Dispose()
+                    $handles[$i] = $null
+                    $output += $result
+                } else {
+                    $finished = $false
+                }
+            }
+            $i++ 
+        }
+        if (-not $finished) { Start-Sleep -Milliseconds 150 }
+    } until ($finished) 
+    $output
+    ## cleanup
+    $runspacePool.Close()
+}
+
+$scriptblock = {
+
+    Param
+    (
+        # Computer Name
+        # Can be used for multiple computers
+        [Parameter(Mandatory=$true,ValueFromPipelineByPropertyName=$true,Position=0)]
+        [string[]]$ComputerName
+    )
+
+    Process
+        {
+            foreach($pc in $ComputerName)
+            {
+
+                Write-Verbose "Testing Connection to $pc"
+                #Write-Output "Testing Connection to $pc"
+        
+                if(Test-Connection $pc -Count 1 -Quiet)
+                {
+                    Try
+                    {
+                        Write-Verbose "Gathering Data from $pc"
+                        #Write-Output "Gathering Data from $pc"
+                
+                        $bioses = Get-WmiObject -Class Win32_Bios -ComputerName $pc
+
+                        foreach ($bios in $bioses)
+                        {
+                           $myobj = @{
+
+                                'Status' = $bios.Status
+                                'Name' = $bios.Name
+                                'Current Language' = $bios.CurrentLanguage
+                                'Release Date' = [management.managementDateTimeConverter]::ToDateTime($bios.ReleaseDate)
+                                'SMB Version' = $bios.SMBIOSBIOSVersion
+                                'Serial Number' = $bios.SerialNumber
+                                'Version' = $bios.Version
+
+                           }
+                   
+                           Write-Output (New-Object -TypeName PSObject -Property $myobj)
+                        }
+
+                    }
+                    Catch
+                    {
+                        Write-Output "Machine $pc not online or PowerShell is unable to read it"
+                        Write-Output "$($Error[0])"
+                    }
+                }
+                else
+                {
+                    Write-Output "Machine not online"
+                }
+           }
+        }
+}
+
+$pc = "pc1","laptop10","pc100"
+Run-Threaded -scriptBlock $scriptblock -targets $pc 1
