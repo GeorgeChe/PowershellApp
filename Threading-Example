@@ -98,4 +98,4 @@ $scriptblock = {
 }
 
 $pc = "pc1","laptop10","pc100"
-Run-Threaded -scriptBlock $scriptblock -targets $pc 1
+Run-Threaded -scriptBlock $scriptblock -targets $pc 3
